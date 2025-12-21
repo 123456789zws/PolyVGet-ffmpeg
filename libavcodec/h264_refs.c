@@ -825,7 +825,7 @@ out:
 }
 
 int ff_h264_decode_ref_pic_marking(H264SliceContext *sl, GetBitContext *gb,
-                                   const H2645NAL *nal, void *logctx)
+                                   const H2645NAL *nal, void *logctx, int read_extra)
 {
     MMCO *mmco = sl->mmco;
     int nb_mmco = 0;
@@ -841,6 +841,8 @@ int ff_h264_decode_ref_pic_marking(H264SliceContext *sl, GetBitContext *gb,
     } else {
         sl->explicit_ref_marking = get_bits1(gb);
         if (sl->explicit_ref_marking) {
+            if (read_extra)
+                get_ue_golomb_31(gb);
             int i;
             for (i = 0; i < FF_ARRAY_ELEMS(sl->mmco); i++) {
                 MMCOOpcode opcode = get_ue_golomb_31(gb);

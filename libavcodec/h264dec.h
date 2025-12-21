@@ -605,7 +605,7 @@ void ff_h264_remove_all_refs(H264Context *h);
 int ff_h264_execute_ref_pic_marking(H264Context *h);
 
 int ff_h264_decode_ref_pic_marking(H264SliceContext *sl, GetBitContext *gb,
-                                   const H2645NAL *nal, void *logctx);
+                                   const H2645NAL *nal, void *logctx, int read_extra);
 
 void ff_h264_hl_decode_mb(const H264Context *h, H264SliceContext *sl);
 void ff_h264_decode_init_vlc(void);

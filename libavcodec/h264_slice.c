@@ -1745,16 +1745,13 @@ static int h264_slice_header_parse(const H264Context *h, H264SliceContext *sl,
     pps = h->ps.pps_list[sl->pps_id];
     sps = pps->sps;
 
-    sl->frame_num = get_bits(&sl->gb, sps->log2_max_frame_num);
-    if (!first_slice) {
-        if (h->poc.frame_num != sl->frame_num) {
-            av_log(h->avctx, AV_LOG_ERROR, "Frame num change from %d to %d\n",
-                   h->poc.frame_num, sl->frame_num);
-            return AVERROR_INVALIDDATA;
-        }
+    if (nal->type == H264_NAL_IDR_SLICE) {
+        unsigned idr_pic_id = get_ue_golomb_long(&sl->gb); // [PolyV] Moved
+        if (idr_pic_id < 65536) {
+            sl->idr_pic_id = idr_pic_id;
+        } else
+            av_log(h->avctx, AV_LOG_WARNING, "idr_pic_id is invalid\n");
     }
-
-    sl->mb_mbaff       = 0;
 
     if (sps->frame_mbs_only_flag) {
         picture_structure = PICT_FRAME;
@@ -1771,6 +1768,21 @@ static int h264_slice_header_parse(const H264Context *h, H264SliceContext *sl,
             picture_structure = PICT_FRAME;
         }
     }
+
+    sl->frame_num = get_bits(&sl->gb, sps->log2_max_frame_num); // [PolyV] Moved
+    if (!first_slice) {
+        if (h->poc.frame_num != sl->frame_num) {
+            av_log(h->avctx, AV_LOG_ERROR, "Frame num change from %d to %d\n",
+                   h->poc.frame_num, sl->frame_num);
+            return AVERROR_INVALIDDATA;
+        }
+    }
+
+    sl->redundant_pic_count = 0;
+    if (pps->redundant_pic_cnt_present)
+        sl->redundant_pic_count = get_ue_golomb(&sl->gb); // [PolyV] Moved
+
+    sl->mb_mbaff               = 0;
     sl->picture_structure      = picture_structure;
     sl->mb_field_decoding_flag = picture_structure != PICT_FRAME;
 
@@ -1782,21 +1794,13 @@ static int h264_slice_header_parse(const H264Context *h, H264SliceContext *sl,
         sl->max_pic_num  = 1 << (sps->log2_max_frame_num + 1);
     }
 
-    if (nal->type == H264_NAL_IDR_SLICE) {
-        unsigned idr_pic_id = get_ue_golomb_long(&sl->gb);
-        if (idr_pic_id < 65536) {
-            sl->idr_pic_id = idr_pic_id;
-        } else
-            av_log(h->avctx, AV_LOG_WARNING, "idr_pic_id is invalid\n");
-    }
-
     sl->poc_lsb = 0;
     sl->delta_poc_bottom = 0;
     if (sps->poc_type == 0) {
-        sl->poc_lsb = get_bits(&sl->gb, sps->log2_max_poc_lsb);
-
-        if (pps->pic_order_present == 1 && picture_structure == PICT_FRAME)
+        if (pps->pic_order_present == 1 && picture_structure == PICT_FRAME) // [PolyV] Moved
             sl->delta_poc_bottom = get_se_golomb(&sl->gb);
+
+        sl->poc_lsb = get_bits(&sl->gb, sps->log2_max_poc_lsb);
     }
 
     sl->delta_poc[0] = sl->delta_poc[1] = 0;
@@ -1806,10 +1810,6 @@ static int h264_slice_header_parse(const H264Context *h, H264SliceContext *sl,
         if (pps->pic_order_present == 1 && picture_structure == PICT_FRAME)
             sl->delta_poc[1] = get_se_golomb(&sl->gb);
     }
-
-    sl->redundant_pic_count = 0;
-    if (pps->redundant_pic_cnt_present)
-        sl->redundant_pic_count = get_ue_golomb(&sl->gb);
 
     if (sl->slice_type_nos == AV_PICTURE_TYPE_B)
         sl->direct_spatial_mv_pred = get_bits1(&sl->gb);
@@ -1845,10 +1845,22 @@ static int h264_slice_header_parse(const H264Context *h, H264SliceContext *sl,
 
     sl->explicit_ref_marking = 0;
     if (nal->ref_idc) {
-        ret = ff_h264_decode_ref_pic_marking(sl, &sl->gb, nal, h->avctx);
+        ret = ff_h264_decode_ref_pic_marking(sl, &sl->gb, nal, h->avctx, 1);
         if (ret < 0 && (h->avctx->err_recognition & AV_EF_EXPLODE))
             return AVERROR_INVALIDDATA;
     }
+
+    if (nal->type == 1) {
+        get_bits(&sl->gb, 2); // TODO: this seems to fix it, but I don't know why
+    }
+
+    sl->last_qscale_diff = 0;
+    tmp = pps->init_qp + (unsigned)get_se_golomb(&sl->gb);
+    if (tmp > 51 + 6 * (sps->bit_depth_luma - 8)) {
+        av_log(h->avctx, AV_LOG_ERROR, "QP %u out of range (%d)\n", tmp, show_bits_long(&sl->gb, 32)); // TODO: temporary
+        return AVERROR_INVALIDDATA;
+    }
+    sl->qscale = tmp;
 
     if (sl->slice_type_nos != AV_PICTURE_TYPE_I && pps->cabac) {
         tmp = get_ue_golomb_31(&sl->gb);
@@ -1859,13 +1871,6 @@ static int h264_slice_header_parse(const H264Context *h, H264SliceContext *sl,
         sl->cabac_init_idc = tmp;
     }
 
-    sl->last_qscale_diff = 0;
-    tmp = pps->init_qp + (unsigned)get_se_golomb(&sl->gb);
-    if (tmp > 51 + 6 * (sps->bit_depth_luma - 8)) {
-        av_log(h->avctx, AV_LOG_ERROR, "QP %u out of range\n", tmp);
-        return AVERROR_INVALIDDATA;
-    }
-    sl->qscale       = tmp;
     sl->chroma_qp[0] = get_chroma_qp(pps, 0, sl->qscale);
     sl->chroma_qp[1] = get_chroma_qp(pps, 1, sl->qscale);
     // FIXME qscale / qp ... stuff
@@ -1890,8 +1895,8 @@ static int h264_slice_header_parse(const H264Context *h, H264SliceContext *sl,
             sl->deblocking_filter ^= 1;  // 1<->0
 
         if (sl->deblocking_filter) {
-            int slice_alpha_c0_offset_div2 = get_se_golomb(&sl->gb);
             int slice_beta_offset_div2     = get_se_golomb(&sl->gb);
+            int slice_alpha_c0_offset_div2 = get_se_golomb(&sl->gb); // [PolyV] Moved
             if (slice_alpha_c0_offset_div2 >  6 ||
                 slice_alpha_c0_offset_div2 < -6 ||
                 slice_beta_offset_div2 >  6     ||
