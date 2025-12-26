@@ -38,6 +38,16 @@ int ff_h264_pred_weight_table(GetBitContext *gb, const SPS *sps,
     pwt->use_weight             = 0;
     pwt->use_weight_chroma      = 0;
 
+    if (sps->chroma_format_idc) {
+        pwt->chroma_log2_weight_denom = get_ue_golomb_31(gb);  // [PolyV] might be get_ue_golomb
+        if (pwt->chroma_log2_weight_denom > 7U) {
+            av_log(logctx, AV_LOG_ERROR, "chroma_log2_weight_denom %d is out of range\n", pwt->chroma_log2_weight_denom);
+            pwt->chroma_log2_weight_denom = 0;
+        }
+        chroma_def = 1 << pwt->chroma_log2_weight_denom;
+    }
+
+    // [PolyV] moved
     pwt->luma_log2_weight_denom = get_ue_golomb_31(gb);
     if (pwt->luma_log2_weight_denom > 7U) {
         av_log(logctx, AV_LOG_ERROR, "luma_log2_weight_denom %d is out of range\n", pwt->luma_log2_weight_denom);
@@ -45,14 +55,7 @@ int ff_h264_pred_weight_table(GetBitContext *gb, const SPS *sps,
     }
     luma_def = 1 << pwt->luma_log2_weight_denom;
 
-    if (sps->chroma_format_idc) {
-        pwt->chroma_log2_weight_denom = get_ue_golomb_31(gb);
-        if (pwt->chroma_log2_weight_denom > 7U) {
-            av_log(logctx, AV_LOG_ERROR, "chroma_log2_weight_denom %d is out of range\n", pwt->chroma_log2_weight_denom);
-            pwt->chroma_log2_weight_denom = 0;
-        }
-        chroma_def = 1 << pwt->chroma_log2_weight_denom;
-    }
+    get_ue_golomb_31(gb);  // [PolyV] added
 
     for (list = 0; list < 2; list++) {
         pwt->luma_weight_flag[list]   = 0;
@@ -62,8 +65,9 @@ int ff_h264_pred_weight_table(GetBitContext *gb, const SPS *sps,
 
             luma_weight_flag = get_bits1(gb);
             if (luma_weight_flag) {
+                pwt->luma_weight[i][list][1] = get_se_golomb(gb);  // [PolyV] moved
+                get_bits1(gb);  // [PolyV] added
                 pwt->luma_weight[i][list][0] = get_se_golomb(gb);
-                pwt->luma_weight[i][list][1] = get_se_golomb(gb);
                 if ((int8_t)pwt->luma_weight[i][list][0] != pwt->luma_weight[i][list][0] ||
                     (int8_t)pwt->luma_weight[i][list][1] != pwt->luma_weight[i][list][1])
                     goto out_range_weight;
@@ -82,8 +86,9 @@ int ff_h264_pred_weight_table(GetBitContext *gb, const SPS *sps,
                 if (chroma_weight_flag) {
                     int j;
                     for (j = 0; j < 2; j++) {
+                        pwt->chroma_weight[i][list][j][1] = get_se_golomb(gb);  // [PolyV] moved
+                        get_bits1(gb);  // [PolyV] added
                         pwt->chroma_weight[i][list][j][0] = get_se_golomb(gb);
-                        pwt->chroma_weight[i][list][j][1] = get_se_golomb(gb);
                         if ((int8_t)pwt->chroma_weight[i][list][j][0] != pwt->chroma_weight[i][list][j][0] ||
                             (int8_t)pwt->chroma_weight[i][list][j][1] != pwt->chroma_weight[i][list][j][1]) {
                             pwt->chroma_weight[i][list][j][0] = chroma_def;
@@ -237,12 +242,12 @@ int ff_h264_parse_ref_count(int *plist_count, int ref_count[2],
         num_ref_idx_active_override_flag = get_bits1(gb);
 
         if (num_ref_idx_active_override_flag) {
-            ref_count[0] = get_ue_golomb(gb) + 1;
             if (slice_type_nos == AV_PICTURE_TYPE_B) {
                 ref_count[1] = get_ue_golomb(gb) + 1;
             } else
                 // full range is spec-ok in this case, even for frames
                 ref_count[1] = 1;
+            ref_count[0] = get_ue_golomb(gb) + 1;  // [PolyV] moved
         }
 
         if (slice_type_nos == AV_PICTURE_TYPE_B)

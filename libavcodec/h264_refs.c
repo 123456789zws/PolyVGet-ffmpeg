@@ -423,14 +423,20 @@ int ff_h264_build_ref_list(H264Context *h, H264SliceContext *sl)
     return 0;
 }
 
-int ff_h264_decode_ref_pic_list_reordering(H264SliceContext *sl, void *logctx)
+int ff_h264_decode_ref_pic_list_reordering(H264SliceContext *sl, void *logctx, int b_mars_flag)  // [PolyV] added "b_mars_flag"
 {
     sl->nb_ref_modifications[0] = 0;
     sl->nb_ref_modifications[1] = 0;
 
     for (int list = 0; list < sl->list_count; list++) {
+        if (b_mars_flag == 1)  // [PolyV] added
+            get_bits(&sl->gb, 2);  // [PolyV] added
+
         if (!get_bits1(&sl->gb))    // ref_pic_list_modification_flag_l[01]
             continue;
+
+        if (b_mars_flag == 1)  // [PolyV] added
+            get_bits1(&sl->gb);  // [PolyV] added
 
         for (int index = 0; ; index++) {
             unsigned int op = get_ue_golomb_31(&sl->gb);
@@ -441,12 +447,18 @@ int ff_h264_decode_ref_pic_list_reordering(H264SliceContext *sl, void *logctx)
             if (index >= sl->ref_count[list]) {
                 av_log(logctx, AV_LOG_ERROR, "reference count overflow\n");
                 return AVERROR_INVALIDDATA;
-            } else if (op > 2) {
+            }
+
+            if (op > 2) {
                 av_log(logctx, AV_LOG_ERROR,
                        "illegal modification_of_pic_nums_idc %u\n",
                        op);
                 return AVERROR_INVALIDDATA;
             }
+
+            if (b_mars_flag == 1)  // [PolyV] added
+                get_bits(&sl->gb, 2);  // [PolyV] added
+
             sl->ref_modifications[list][index].val = get_ue_golomb_long(&sl->gb);
             sl->ref_modifications[list][index].op  = op;
             sl->nb_ref_modifications[list]++;
@@ -825,7 +837,7 @@ out:
 }
 
 int ff_h264_decode_ref_pic_marking(H264SliceContext *sl, GetBitContext *gb,
-                                   const H2645NAL *nal, void *logctx, int read_extra)
+                                   const H2645NAL *nal, void *logctx, int b_mars_flag)  // [PolyV] added "b_mars_flag"
 {
     MMCO *mmco = sl->mmco;
     int nb_mmco = 0;
@@ -841,8 +853,8 @@ int ff_h264_decode_ref_pic_marking(H264SliceContext *sl, GetBitContext *gb,
     } else {
         sl->explicit_ref_marking = get_bits1(gb);
         if (sl->explicit_ref_marking) {
-            if (read_extra)
-                get_ue_golomb_31(gb);
+            if (b_mars_flag)  // [PolyV] added
+                get_ue_golomb_31(gb);  // [PolyV] added
             int i;
             for (i = 0; i < FF_ARRAY_ELEMS(sl->mmco); i++) {
                 MMCOOpcode opcode = get_ue_golomb_31(gb);

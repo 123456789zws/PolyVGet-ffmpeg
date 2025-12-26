@@ -45,6 +45,13 @@ static const uint8_t default_scaling4[2][16] = {
       20, 24, 27, 30, 24, 27, 30, 34 }
 };
 
+static const uint8_t default_scaling4_mars[2][16] = {
+    {  6, 12, 21, 28, 12, 21, 28, 32,
+      21, 28, 32, 36, 28, 32, 36, 42 },
+    { 10, 14, 22, 24, 14, 22, 24, 27,
+      22, 24, 27, 31, 24, 27, 31, 34 }
+};
+
 static const uint8_t default_scaling8[2][64] = {
     {  6, 10, 13, 16, 18, 23, 25, 27,
       10, 11, 16, 18, 23, 25, 27, 29,
@@ -62,6 +69,25 @@ static const uint8_t default_scaling8[2][64] = {
       21, 22, 24, 25, 27, 28, 30, 32,
       22, 24, 25, 27, 28, 30, 32, 33,
       24, 25, 27, 28, 30, 32, 33, 35 }
+};
+
+static const uint8_t default_scaling8_mars[2][64] = {
+    {  6, 10, 13, 16, 18, 23, 25, 27,
+      10, 11, 16, 18, 23, 25, 27, 29,
+      13, 16, 18, 23, 25, 27, 29, 31,
+      16, 18, 23, 25, 27, 29, 31, 34,
+      18, 23, 25, 27, 29, 31, 34, 36,
+      23, 25, 27, 29, 31, 34, 36, 37,
+      25, 27, 29, 31, 34, 36, 37, 39,
+      27, 29, 31, 34, 36, 37, 39, 42 },  // [PolyV] changed
+    {  9, 13, 15, 17, 20, 21, 22, 24,
+      13, 13, 17, 20, 21, 22, 24, 25,
+      15, 17, 20, 21, 22, 24, 25, 27,
+      17, 20, 21, 22, 24, 25, 27, 28,
+      20, 21, 22, 24, 25, 27, 28, 30,
+      21, 22, 24, 25, 27, 28, 30, 33,
+      22, 24, 25, 27, 28, 30, 33, 34,
+      24, 25, 27, 28, 30, 33, 34, 35 }  // [PolyV] changed
 };
 
 /* maximum number of MBs in the DPB for a given level */
@@ -142,8 +168,9 @@ static inline int decode_vui_parameters(GetBitContext *gb, void *logctx,
 
     sps->timing_info_present_flag = get_bits1(gb);
     if (sps->timing_info_present_flag) {
+        sps->fixed_frame_rate_flag = get_bits1(gb);  // [PolyV] moved
+        unsigned time_scale        = get_bits_long(gb, 32);  // [PolyV] moved
         unsigned num_units_in_tick = get_bits_long(gb, 32);
-        unsigned time_scale        = get_bits_long(gb, 32);
         if (!num_units_in_tick || !time_scale) {
             av_log(logctx, AV_LOG_ERROR,
                    "time_scale/num_units_in_tick invalid or unsupported (%u/%u)\n",
@@ -153,14 +180,13 @@ static inline int decode_vui_parameters(GetBitContext *gb, void *logctx,
             sps->num_units_in_tick = num_units_in_tick;
             sps->time_scale = time_scale;
         }
-        sps->fixed_frame_rate_flag = get_bits1(gb);
     }
 
-    sps->nal_hrd_parameters_present_flag = get_bits1(gb);
+    sps->nal_hrd_parameters_present_flag = get_bits1(gb);  // [PolyV] may be flipped, can't prove it
     if (sps->nal_hrd_parameters_present_flag)
         if (decode_hrd_parameters(gb, logctx, sps) < 0)
             return AVERROR_INVALIDDATA;
-    sps->vcl_hrd_parameters_present_flag = get_bits1(gb);
+    sps->vcl_hrd_parameters_present_flag = get_bits1(gb);  // [PolyV] may be flipped, can't prove it
     if (sps->vcl_hrd_parameters_present_flag)
         if (decode_hrd_parameters(gb, logctx, sps) < 0)
             return AVERROR_INVALIDDATA;
@@ -172,9 +198,9 @@ static inline int decode_vui_parameters(GetBitContext *gb, void *logctx,
         return 0;
     sps->bitstream_restriction_flag = get_bits1(gb);
     if (sps->bitstream_restriction_flag) {
-        get_bits1(gb);     /* motion_vectors_over_pic_boundaries_flag */
         get_ue_golomb_31(gb); /* max_bytes_per_pic_denom */
         get_ue_golomb_31(gb); /* max_bits_per_mb_denom */
+        get_bits1(gb);     /* motion_vectors_over_pic_boundaries_flag */ // [PolyV] moved
         get_ue_golomb_31(gb); /* log2_max_mv_length_horizontal */
         get_ue_golomb_31(gb); /* log2_max_mv_length_vertical */
         sps->num_reorder_frames = get_ue_golomb_31(gb);
@@ -235,31 +261,72 @@ static int decode_scaling_matrices(GetBitContext *gb, const SPS *sps,
                                     uint8_t(*scaling_matrix8)[64])
 {
     int fallback_sps = !is_sps && sps->scaling_matrix_present;
-    const uint8_t *fallback[4] = {
-        fallback_sps ? sps->scaling_matrix4[0] : default_scaling4[0],
-        fallback_sps ? sps->scaling_matrix4[3] : default_scaling4[1],
-        fallback_sps ? sps->scaling_matrix8[0] : default_scaling8[0],
-        fallback_sps ? sps->scaling_matrix8[3] : default_scaling8[1]
-    };
+    const uint8_t *fallback_0;
+    const uint8_t *fallback_1;
+    const uint8_t *fallback_2;
+    const uint8_t *fallback_3;
+
+    int b_mars_flag;
+
+    if (sps->profile_idc == 77 || sps->profile_idc == 66) {
+        b_mars_flag = 0;
+        if (fallback_sps) {
+            fallback_0 = sps->scaling_matrix4[0];
+            fallback_1 = sps->scaling_matrix4[3];
+            fallback_2 = sps->scaling_matrix8[0];
+            fallback_3 = sps->scaling_matrix8[3];
+        } else {
+            fallback_0 = default_scaling4[0];
+            fallback_1 = default_scaling4[1];
+            fallback_2 = default_scaling8[0];
+            fallback_3 = default_scaling8[1];
+        }
+    } else {
+        b_mars_flag = 1;
+        if (fallback_sps) {
+            fallback_0 = sps->scaling_matrix4[0];
+            fallback_1 = sps->scaling_matrix4[3];
+            fallback_2 = sps->scaling_matrix8[0];
+            fallback_3 = sps->scaling_matrix8[3];
+        } else {
+            fallback_0 = default_scaling4_mars[0];  // [PolyV] edited scaling
+            fallback_1 = default_scaling4_mars[1];  // [PolyV] edited scaling
+            fallback_2 = default_scaling8_mars[1];  // [PolyV] edited scaling
+            fallback_3 = default_scaling8_mars[0];  // [PolyV] edited scaling
+        }
+    }
+
     int ret = 0;
     *mask = 0x0;
+
     if (present_flag) {
-        ret |= decode_scaling_list(gb, scaling_matrix4[0], 16, default_scaling4[0], fallback[0], mask, 0);        // Intra, Y
-        ret |= decode_scaling_list(gb, scaling_matrix4[1], 16, default_scaling4[0], scaling_matrix4[0], mask, 1); // Intra, Cr
-        ret |= decode_scaling_list(gb, scaling_matrix4[2], 16, default_scaling4[0], scaling_matrix4[1], mask, 2); // Intra, Cb
-        ret |= decode_scaling_list(gb, scaling_matrix4[3], 16, default_scaling4[1], fallback[1], mask, 3);        // Inter, Y
-        ret |= decode_scaling_list(gb, scaling_matrix4[4], 16, default_scaling4[1], scaling_matrix4[3], mask, 4); // Inter, Cr
-        ret |= decode_scaling_list(gb, scaling_matrix4[5], 16, default_scaling4[1], scaling_matrix4[4], mask, 5); // Inter, Cb
+        const uint8_t *default4_0 = b_mars_flag ? default_scaling4_mars[0] : default_scaling4[0];
+        const uint8_t *default4_1 = b_mars_flag ? default_scaling4_mars[1] : default_scaling4[1];
+        const uint8_t *default8_0 = b_mars_flag ? default_scaling8_mars[0] : default_scaling8[0];
+        const uint8_t *default8_1 = b_mars_flag ? default_scaling8_mars[1] : default_scaling8[1];
+
+        ret |= decode_scaling_list(gb, scaling_matrix4[0], 16, default4_0, fallback_0, mask, 0);
+        ret |= decode_scaling_list(gb, scaling_matrix4[1], 16, default4_0, scaling_matrix4[0], mask, 1);
+        ret |= decode_scaling_list(gb, scaling_matrix4[2], 16, default4_0, scaling_matrix4[1], mask, 2);
+        ret |= decode_scaling_list(gb, scaling_matrix4[3], 16, default4_1, fallback_1, mask, 3);
+        ret |= decode_scaling_list(gb, scaling_matrix4[4], 16, default4_1, scaling_matrix4[3], mask, 4);
+        ret |= decode_scaling_list(gb, scaling_matrix4[5], 16, default4_1, scaling_matrix4[4], mask, 5);
+
         if (is_sps || pps->transform_8x8_mode) {
-            ret |= decode_scaling_list(gb, scaling_matrix8[0], 64, default_scaling8[0], fallback[2], mask, 6); // Intra, Y
-            ret |= decode_scaling_list(gb, scaling_matrix8[3], 64, default_scaling8[1], fallback[3], mask, 7); // Inter, Y
+            ret |= decode_scaling_list(gb, scaling_matrix8[0], 64, default8_0, fallback_2, mask, 6);
+            ret |= decode_scaling_list(gb, scaling_matrix8[3], 64, default8_1, fallback_3, mask, 7);
+
             if (sps->chroma_format_idc == 3) {
-                ret |= decode_scaling_list(gb, scaling_matrix8[1], 64, default_scaling8[0], scaling_matrix8[0], mask,  8); // Intra, Cr
-                ret |= decode_scaling_list(gb, scaling_matrix8[4], 64, default_scaling8[1], scaling_matrix8[3], mask,  9); // Inter, Cr
-                ret |= decode_scaling_list(gb, scaling_matrix8[2], 64, default_scaling8[0], scaling_matrix8[1], mask, 10); // Intra, Cb
-                ret |= decode_scaling_list(gb, scaling_matrix8[5], 64, default_scaling8[1], scaling_matrix8[4], mask, 11); // Inter, Cb
+                const uint8_t *default8_0_chroma = b_mars_flag ? default_scaling8_mars[1] : default_scaling8[0];  // [PolyV] swapped
+                const uint8_t *default8_1_chroma = b_mars_flag ? default_scaling8_mars[0] : default_scaling8[1];  // [PolyV] swapped
+
+                ret |= decode_scaling_list(gb, scaling_matrix8[1], 64, default8_0_chroma, scaling_matrix8[0], mask, 8);
+                ret |= decode_scaling_list(gb, scaling_matrix8[4], 64, default8_1_chroma, scaling_matrix8[3], mask, 9);
+                ret |= decode_scaling_list(gb, scaling_matrix8[2], 64, default8_0_chroma, scaling_matrix8[1], mask, 10);
+                ret |= decode_scaling_list(gb, scaling_matrix8[5], 64, default8_1_chroma, scaling_matrix8[4], mask, 11);
             }
         }
+
         if (!ret)
             ret = is_sps;
     }
@@ -300,8 +367,6 @@ int ff_h264_decode_seq_parameter_set(GetBitContext *gb, AVCodecContext *avctx,
         sps->data_size = sizeof(sps->data);
     }
     memcpy(sps->data, gb->buffer, sps->data_size);
-
-    sps->b_mars_flag = 1; // [PolyV] always active
 
     // Re-add the removed stop bit (may be used by hwaccels).
     if (!(gb->size_in_bits & 7) && sps->data_size < sizeof(sps->data))
@@ -441,7 +506,7 @@ int ff_h264_decode_seq_parameter_set(GetBitContext *gb, AVCodecContext *avctx,
         goto fail;
     }
 
-    sps->ref_frame_count = get_ue_golomb_31(gb) + 4;             // [PolyV] Added +4
+    sps->ref_frame_count = get_ue_golomb_31(gb) - 4;             // [PolyV] Added -4
     if (avctx->codec_tag == MKTAG('S', 'M', 'V', '2'))
         sps->ref_frame_count = FFMAX(2, sps->ref_frame_count);
     if (sps->ref_frame_count > H264_MAX_DPB_FRAMES) {
@@ -802,10 +867,10 @@ int ff_h264_decode_picture_parameter_set(GetBitContext *gb, AVCodecContext *avct
     bits_left = bit_length - get_bits_count(gb);
     if (bits_left > 0 && more_rbsp_data_in_pps(sps, avctx)) {
         pps->transform_8x8_mode = get_bits1(gb);
-        //pps->pic_scaling_matrix_present_flag = get_bits1(gb); // [PolyV] ignored
 
-        if (sps->b_mars_flag == 1) // [PolyV] added
-            get_bits(gb, 2);
+        get_bits(gb, 2);  // [PolyV] added
+
+        pps->pic_scaling_matrix_present_flag = get_bits1(gb);  // [PolyV] moved (read inside decode_scaling_matrices in the binary)
 
         ret = decode_scaling_matrices(gb, sps, pps, 0,
                                 pps->pic_scaling_matrix_present_flag,
@@ -814,8 +879,7 @@ int ff_h264_decode_picture_parameter_set(GetBitContext *gb, AVCodecContext *avct
         if (ret < 0)
             goto fail;
 
-        if (sps->b_mars_flag == 1) // [PolyV] added
-            get_se_golomb(gb);
+        get_se_golomb(gb);  // [PolyV] added
 
         // second_chroma_qp_index_offset
         pps->chroma_qp_index_offset[1] = get_se_golomb(gb);

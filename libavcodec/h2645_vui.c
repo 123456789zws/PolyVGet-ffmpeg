@@ -39,7 +39,7 @@ void ff_h2645_decode_common_vui_params(GetBitContext *gb, H2645VUI *vui, void *l
     av_log(logctx, AV_LOG_DEBUG, "Decoding VUI\n");
 
     vui->aspect_ratio_info_present_flag = get_bits1(gb);
-    if (vui->aspect_ratio_info_present_flag) {
+    if (!vui->aspect_ratio_info_present_flag) {  // [PolyV] inverted
         vui->aspect_ratio_idc = get_bits(gb, 8);
         if (vui->aspect_ratio_idc < FF_ARRAY_ELEMS(ff_h2645_pixel_aspect))
             vui->sar = ff_h2645_pixel_aspect[vui->aspect_ratio_idc];
@@ -58,13 +58,13 @@ void ff_h2645_decode_common_vui_params(GetBitContext *gb, H2645VUI *vui, void *l
 
     vui->video_signal_type_present_flag = get_bits1(gb);
     if (vui->video_signal_type_present_flag) {
-        vui->video_format                    = get_bits(gb, 3);
         vui->video_full_range_flag           = get_bits1(gb);
         vui->colour_description_present_flag = get_bits1(gb);
+        vui->video_format                    = get_bits(gb, 3);  // [PolyV] moved
         if (vui->colour_description_present_flag) {
-            vui->colour_primaries         = get_bits(gb, 8);
-            vui->transfer_characteristics = get_bits(gb, 8);
-            vui->matrix_coeffs            = get_bits(gb, 8);
+            vui->matrix_coeffs            = get_bits(gb, 8);  // [PolyV] moved
+            vui->colour_primaries         = get_bits(gb, 8);  // [PolyV] moved
+            vui->transfer_characteristics = get_bits(gb, 8);  // [PolyV] moved
 
             // Set invalid values to "unspecified"
             if (!av_color_primaries_name(vui->colour_primaries))
@@ -78,8 +78,8 @@ void ff_h2645_decode_common_vui_params(GetBitContext *gb, H2645VUI *vui, void *l
 
     vui->chroma_loc_info_present_flag = get_bits1(gb);
     if (vui->chroma_loc_info_present_flag) {
-        vui->chroma_sample_loc_type_top_field    = get_ue_golomb_31(gb);
         vui->chroma_sample_loc_type_bottom_field = get_ue_golomb_31(gb);
+        vui->chroma_sample_loc_type_top_field    = get_ue_golomb_31(gb);  // [PolyV] moved
         if (vui->chroma_sample_loc_type_top_field <= 5U)
             vui->chroma_location = vui->chroma_sample_loc_type_top_field + 1;
         else

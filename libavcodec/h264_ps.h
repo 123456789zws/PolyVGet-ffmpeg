@@ -45,7 +45,6 @@ typedef struct SPS {
     unsigned int sps_id;
     int profile_idc;
     int level_idc;
-    int b_mars_flag;                   //< PolyV
     int chroma_format_idc;
     int transform_bypass;              ///< qpprime_y_zero_transform_bypass_flag
     int log2_max_frame_num;            ///< log2_max_frame_num_minus4 + 4

@@ -1821,7 +1821,7 @@ static int h264_slice_header_parse(const H264Context *h, H264SliceContext *sl,
         return ret;
 
     if (sl->slice_type_nos != AV_PICTURE_TYPE_I) {
-       ret = ff_h264_decode_ref_pic_list_reordering(sl, h->avctx);
+       ret = ff_h264_decode_ref_pic_list_reordering(sl, h->avctx, 1);
        if (ret < 0) {
            sl->ref_count[1] = sl->ref_count[0] = 0;
            return ret;
@@ -1850,14 +1850,10 @@ static int h264_slice_header_parse(const H264Context *h, H264SliceContext *sl,
             return AVERROR_INVALIDDATA;
     }
 
-    if (nal->type == 1) {
-        get_bits(&sl->gb, 2); // TODO: this seems to fix it, but I don't know why
-    }
-
     sl->last_qscale_diff = 0;
     tmp = pps->init_qp + (unsigned)get_se_golomb(&sl->gb);
     if (tmp > 51 + 6 * (sps->bit_depth_luma - 8)) {
-        av_log(h->avctx, AV_LOG_ERROR, "QP %u out of range (%d)\n", tmp, show_bits_long(&sl->gb, 32)); // TODO: temporary
+        av_log(h->avctx, AV_LOG_ERROR, "QP %u out of range\n", tmp);
         return AVERROR_INVALIDDATA;
     }
     sl->qscale = tmp;
