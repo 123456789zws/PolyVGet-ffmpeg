@@ -1,0 +1,72 @@
+name: Build FFmpeg (PolyV)
+
+on:
+  push:
+    branches: [ master, main ]
+  workflow_dispatch:  # 手动触发
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    
+    steps:
+    - name: 检出代码
+      uses: actions/checkout@v4
+    
+    - name: 安装 MSYS2
+      uses: msys2/setup-msys2@v2
+      with:
+        msystem: MINGW64
+        update: true
+        install: |
+          base-devel
+          mingw-w64-x86_64-toolchain
+          mingw-w64-x86_64-x264
+          mingw-w64-x86_64-lame
+          mingw-w64-x86_64-zlib
+          make
+          nasm
+          git
+          autoconf
+          automake
+          libtool
+          pkg-config
+    
+    - name: 编译 FFmpeg
+      shell: msys2 {0}
+      run: |
+        export CFLAGS="-O3 -march=native -mtune=native -pipe -flto=auto -fomit-frame-pointer"
+        export LDFLAGS="-flto=auto -s"
+        ./configure \
+          --prefix="$HOME/ffmpeg_build" \
+          --enable-gpl \
+          --enable-static \
+          --disable-shared \
+          --disable-doc \
+          --disable-ffplay \
+          --disable-ffprobe \
+          --disable-avdevice \
+          --disable-swresample \
+          --disable-postproc \
+          --disable-network \
+          --disable-everything \
+          --enable-decoder=h264 \
+          --enable-decoder=aac \
+          --enable-parser=h264 \
+          --enable-parser=aac \
+          --enable-demuxer=mpegts \
+          --enable-muxer=mpegts \
+          --enable-protocol=file \
+          --enable-libx264 \
+          --extra-cflags="$CFLAGS" \
+          --extra-ldflags="$LDFLAGS"
+        make -j$(nproc)
+        make install
+    
+    - name: 上传编译结果
+      uses: actions/upload-artifact@v4
+      with:
+        name: ffmpeg-polyv
+        path: |
+          ~/ffmpeg_build/bin/ffmpeg.exe
+          ~/ffmpeg_build/bin/ffprobe.exe
