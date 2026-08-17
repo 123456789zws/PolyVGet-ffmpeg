@@ -63,11 +63,10 @@ jobs:
         make -j$(nproc)
         make install
     
-    - name: 复制文件到当前目录（确保能找到）
+    - name: 复制 ffmpeg.exe 到当前目录
       shell: msys2 {0}
       run: |
         cp -v $HOME/ffmpeg_build/bin/ffmpeg.exe ./
-        cp -v $HOME/ffmpeg_build/bin/ffprobe.exe ./
         echo "=== 当前目录文件 ==="
         ls -la ./*.exe
     
@@ -75,6 +74,4 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: ffmpeg-polyv
-        path: |
-          ffmpeg.exe
-          ffprobe.exe
+        path: ffmpeg.exe
